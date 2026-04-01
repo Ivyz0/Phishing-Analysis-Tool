@@ -1,0 +1,74 @@
+Delivered-To: victim@company.com
+Return-Path: <bounce-xyz@mail-srv.phishnet.ru>
+Received: from mx.company.com (mx.company.com [10.0.0.5])
+    by mail.company.com with ESMTP id abc123
+    for <victim@company.com>;
+    Mon, 31 Mar 2026 09:14:22 -0400 (EDT)
+Received: from mail-srv.phishnet.ru (mail-srv.phishnet.ru [185.203.44.71])
+    by mx.company.com with ESMTP id def456
+    for <victim@company.com>;
+    Mon, 31 Mar 2026 09:14:19 -0400 (EDT)
+Received: from localhost (unknown [192.168.1.100])
+    by mail-srv.phishnet.ru with SMTP id ghi789;
+    Mon, 31 Mar 2026 16:14:15 +0300
+Authentication-Results: mx.company.com;
+    spf=fail (sender IP is 185.203.44.71) smtp.mailfrom=mail-srv.phishnet.ru;
+    dkim=fail (signature verification failed) header.d=paypa1-security.com;
+    dmarc=fail (p=reject) header.from=paypal.com
+From: PayPal Security Team <security-alert@paypal.com>
+Reply-To: paypal-verify@gmail.com
+To: victim@company.com
+Subject: [URGENT] Your PayPal Account Has Been Limited - Immediate Action Required
+Date: Mon, 31 Mar 2026 16:14:00 +0300
+Message-ID: <fake-msgid-8832f@mail-srv.phishnet.ru>
+MIME-Version: 1.0
+Content-Type: text/html; charset="UTF-8"
+X-Mailer: PHPMailer 5.2.26
+
+<html>
+<body style="font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5;">
+<div style="max-width: 600px; margin: auto; background: white; padding: 30px; border-radius: 5px;">
+
+<div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #003087;">
+<h1 style="color: #003087; margin: 0;">PayPal</h1>
+</div>
+
+<h2 style="color: #333;">Your account access has been limited</h2>
+
+<p>Dear Customer,</p>
+
+<p>We've noticed unusual activity on your PayPal account. For your protection,
+we've temporarily limited what you can do with your account until you verify
+your identity.</p>
+
+<p><strong>What happened:</strong></p>
+<ul>
+<li>Suspicious login attempt from an unrecognized device</li>
+<li>Multiple failed payment attempts detected</li>
+<li>Your account information needs to be updated</li>
+</ul>
+
+<p><strong>If you don't verify within 24 hours, your account will be permanently suspended.</strong></p>
+
+<div style="text-align: center; margin: 30px 0;">
+<a href="http://paypa1-security.com/verify/account?id=victim&token=abc123"
+   style="background-color: #0070ba; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-size: 16px;">
+   Verify Your Account Now
+</a>
+</div>
+
+<p style="font-size: 12px; color: #666;">
+If you did not make this request, please verify your account immediately to prevent
+unauthorized access. This is an automated message from PayPal Security.
+</p>
+
+<hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+
+<p style="font-size: 11px; color: #999; text-align: center;">
+PayPal, Inc. 2211 North First Street, San Jose, CA 95131<br>
+Please do not reply to this email. This mailbox is not monitored.
+</p>
+
+</div>
+</body>
+</html>
