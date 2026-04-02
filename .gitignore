@@ -3,12 +3,14 @@
 
 # Output directory
 /output/
+/reports/*.json
+/reports/*.pdf
 
 # Python cache
 __pycache__/
 *.pyc
 
 # Dataset files (large downloads — don't commit to the repo)
-# Download from: https://www.kaggle.com/datasets/naserabdullahalam/phishing-email-dataset
+# Keep the CEAS dataset in data/ locally when running the analyzer.
 /data/*.csv
 /data/*.zip

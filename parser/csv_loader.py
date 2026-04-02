@@ -1,129 +1,123 @@
 import csv
-import email
 from email.message import Message
 
-# download from: https://www.kaggle.com/datasets/naserabdullahalam/phishing-email-dataset
-# place the CSV in data/ and run: python main.py
+csv.field_size_limit(10 * 1024 * 1024)
 
-# common column name variations for the email body field
-EMAIL_TEXT_COLUMNS = [
-    "Email Text",
-    "email_text",
-    "text",
+CEAS_COLUMNS = [
+    "sender",
+    "receiver",
+    "date",
+    "subject",
     "body",
-    "content",
-    "message",
-    "email",
-]
-
-# common column name variations for the phishing/safe label field
-EMAIL_LABEL_COLUMNS = [
-    "Email Type",
-    "email_type",
     "label",
-    "type",
-    "is_phishing",
-    "class",
-    "category",
+    "urls",
 ]
 
 
-# returns a list of dicts: {msg, label, index}
 def load_emails_from_csv(csv_file_path: str, max_emails: int = None) -> list:
     results = []
 
     try:
         csv_file = open(csv_file_path, "r", encoding="utf-8", errors="replace", newline="")
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Could not find the dataset file: {csv_file_path}\n"
-            f"Download it from:\n"
-            f"  https://www.kaggle.com/datasets/naserabdullahalam/phishing-email-dataset\n"
-            f"Then place the CSV file at: {csv_file_path}"
-        )
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Dataset file not found: {csv_file_path}") from exc
 
-    reader = csv.DictReader(csv_file)
+    with csv_file:
+        reader = csv.DictReader(csv_file)
 
-    if reader.fieldnames is None:
-        csv_file.close()
-        raise ValueError(f"CSV file appears to be empty or has no header row: {csv_file_path}")
+        if reader.fieldnames is None:
+            raise ValueError(f"CSV has no header row: {csv_file_path}")
 
-    text_column = find_column_name(reader.fieldnames, EMAIL_TEXT_COLUMNS)
-    if text_column is None:
-        csv_file.close()
-        raise ValueError(
-            f"Could not find the email text column in the CSV.\n"
-            f"Found columns: {list(reader.fieldnames)}\n"
-            f"Expected one of: {EMAIL_TEXT_COLUMNS}"
-        )
+        validate_ceas_columns(reader.fieldnames, csv_file_path)
 
-    label_column = find_column_name(reader.fieldnames, EMAIL_LABEL_COLUMNS)
-    if label_column is None:
-        csv_file.close()
-        raise ValueError(
-            f"Could not find the label column in the CSV.\n"
-            f"Found columns: {list(reader.fieldnames)}\n"
-            f"Expected one of: {EMAIL_LABEL_COLUMNS}"
-        )
+        for row_number, row in enumerate(reader, start=1):
+            if max_emails is not None and len(results) >= max_emails:
+                break
 
-    row_number = 0
-
-    for row in reader:
-        row_number += 1
-
-        if max_emails is not None and len(results) >= max_emails:
-            break
-
-        email_text = row.get(text_column, "")
-        label = row.get(label_column, "unknown")
-
-        if email_text is None or email_text.strip() == "":
-            continue
-
-        msg = parse_email_from_text(email_text.strip())
-
-        results.append({
-            "msg":   msg,
-            "label": label,
-            "index": row_number,
-        })
-
-    csv_file.close()
+            record = build_record(row, row_number)
+            if record is not None:
+                results.append(record)
 
     return results
 
 
-# case-insensitive search through fieldnames, returns the actual column name or None
-def find_column_name(fieldnames, candidates: list):
-    lowercase_to_actual = {}
-    for fieldname in fieldnames:
-        if fieldname is not None:
-            lowercase_to_actual[fieldname.lower().strip()] = fieldname
+def validate_ceas_columns(fieldnames: list, csv_file_path: str) -> None:
+    normalized_fieldnames = {name.strip().lower() for name in fieldnames if name is not None}
+    missing_columns = [column for column in CEAS_COLUMNS if column not in normalized_fieldnames]
 
-    for candidate in candidates:
-        candidate_lower = candidate.lower().strip()
-        if candidate_lower in lowercase_to_actual:
-            return lowercase_to_actual[candidate_lower]
-
-    return None
+    if missing_columns:
+        raise ValueError(
+            "This project now expects the CEAS CSV layout only.\n"
+            f"Missing columns in {csv_file_path}: {missing_columns}\n"
+            f"Expected columns: {CEAS_COLUMNS}"
+        )
 
 
-# tries to parse text as a real email; falls back to a body-only Message if there are no headers
-def parse_email_from_text(email_text: str) -> Message:
-    parsed = email.message_from_string(email_text)
+def build_record(row: dict, row_number: int):
+    sender = (row.get("sender") or "").strip()
+    receiver = (row.get("receiver") or "").strip()
+    date = (row.get("date") or "").strip()
+    subject = (row.get("subject") or "").strip()
+    body = (row.get("body") or "").strip()
+    label = normalize_label(row.get("label") or "")
+    dataset_url_count = parse_int(row.get("urls"))
 
-    has_from = parsed.get("From") is not None
-    has_subject = parsed.get("Subject") is not None
-    has_received = parsed.get("Received") is not None
-    has_auth = parsed.get("Authentication-Results") is not None
+    if sender == "" and subject == "" and body == "":
+        return None
 
-    has_any_header = has_from or has_subject or has_received or has_auth
+    return {
+        "index": row_number,
+        "source_type": "ceas_csv",
+        "dataset_name": "CEAS_08",
+        "sender": sender,
+        "receiver": receiver,
+        "date": date,
+        "subject": subject,
+        "body": body,
+        "ground_truth_label": label,
+        "dataset_url_count": dataset_url_count,
+        "msg": build_message(sender, receiver, subject, date, body),
+    }
 
-    if has_any_header:
-        return parsed
 
-    # no headers — wrap the raw text in a minimal Message so the rest of the code won't break
-    body_only_msg = Message()
-    body_only_msg.set_payload(email_text)
+def normalize_label(label: str) -> str:
+    normalized = label.strip().lower()
 
-    return body_only_msg
+    if normalized in {"1", "phishing email", "phishing"}:
+        return "Phishing"
+
+    if normalized in {"0", "safe email", "legitimate", "ham"}:
+        return "Legitimate"
+
+    if normalized == "":
+        return "Unknown"
+
+    return normalized.capitalize()
+
+
+def parse_int(value) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_message(sender: str, receiver: str, subject: str, date: str, body: str) -> Message:
+    msg = Message()
+
+    if sender != "":
+        msg["From"] = sender
+
+    if receiver != "":
+        msg["To"] = receiver
+
+    if subject != "":
+        msg["Subject"] = subject
+
+    if date != "":
+        msg["Date"] = date
+
+    if body != "":
+        msg.set_payload(body)
+
+    return msg

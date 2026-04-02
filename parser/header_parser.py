@@ -4,24 +4,57 @@ from typing import Optional
 
 
 def parse_email(file_path: str) -> Message:
-    file_content = None
-
     try:
-        f = open(file_path, "r", encoding="utf-8")
-        file_content = f.read()
-        f.close()
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Could not find email file: {file_path}")
+        with open(file_path, "r", encoding="utf-8", errors="replace") as email_file:
+            file_content = email_file.read()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Could not find email file: {file_path}") from exc
 
-    if file_content == "" or file_content == None:
+    if file_content == "":
         raise ValueError(f"Email file is empty: {file_path}")
 
     msg = email.message_from_string(file_content)
 
-    if msg["From"] == None:
+    if msg["From"] is None and msg["Subject"] is None:
         raise ValueError(f"Doesn't look like a valid email file: {file_path}")
 
     return msg
+
+
+def extract_body_text(msg: Message) -> str:
+    if msg.is_multipart():
+        body_parts = []
+
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+
+            disposition = (part.get("Content-Disposition") or "").lower()
+            if disposition.startswith("attachment"):
+                continue
+
+            body_text = decode_part_payload(part)
+            if body_text != "":
+                body_parts.append(body_text)
+
+        return "\n".join(body_parts).strip()
+
+    return decode_part_payload(msg).strip()
+
+
+def decode_part_payload(part: Message) -> str:
+    payload = part.get_payload(decode=True)
+
+    if isinstance(payload, bytes):
+        charset = part.get_content_charset() or "utf-8"
+        return payload.decode(charset, errors="replace")
+
+    raw_payload = part.get_payload()
+
+    if isinstance(raw_payload, str):
+        return raw_payload
+
+    return ""
 
 
 def extract_sender(msg: Message) -> dict:
@@ -29,28 +62,23 @@ def extract_sender(msg: Message) -> dict:
     reply_to_header = msg.get("Reply-To")
     return_path_header = msg.get("Return-Path")
 
-    sender_info = {
+    return {
         "from": from_header,
         "reply_to": reply_to_header,
         "return_path": return_path_header,
     }
 
-    return sender_info
-
 
 def extract_received_chain(msg: Message) -> list:
     received_headers = msg.get_all("Received")
 
-    if received_headers == None:
+    if received_headers is None:
         return []
 
     cleaned_headers = []
 
     for header in received_headers:
-        # strip out newlines and extra spaces
-        parts = header.split()
-        cleaned = " ".join(parts)
-        cleaned_headers.append(cleaned)
+        cleaned_headers.append(" ".join(header.split()))
 
     return cleaned_headers
 
@@ -64,30 +92,27 @@ def extract_auth_results(msg: Message) -> dict:
 
     auth_header = msg.get("Authentication-Results")
 
-    if auth_header == None:
+    if auth_header is None:
         return auth_results
 
-    # normalize it so its easier to work with
-    auth_text = auth_header.lower()
-    auth_text = " ".join(auth_text.split())
+    auth_text = " ".join(auth_header.lower().split())
 
     spf_result = _find_auth_value(auth_text, "spf")
     dkim_result = _find_auth_value(auth_text, "dkim")
     dmarc_result = _find_auth_value(auth_text, "dmarc")
 
-    if spf_result != None:
+    if spf_result is not None:
         auth_results["spf"] = spf_result
 
-    if dkim_result != None:
+    if dkim_result is not None:
         auth_results["dkim"] = dkim_result
 
-    if dmarc_result != None:
+    if dmarc_result is not None:
         auth_results["dmarc"] = dmarc_result
 
     return auth_results
 
 
-# looks for patterns like "spf=fail" and returns the value after the =
 def _find_auth_value(auth_text: str, method: str) -> Optional[str]:
     search_for = method + "="
     position = auth_text.find(search_for)
@@ -99,8 +124,7 @@ def _find_auth_value(auth_text: str, method: str) -> Optional[str]:
     remaining = auth_text[start:]
 
     end = len(remaining)
-    for i in range(len(remaining)):
-        char = remaining[i]
+    for i, char in enumerate(remaining):
         if char == " " or char == ";":
             end = i
             break
