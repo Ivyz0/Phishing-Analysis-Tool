@@ -1,53 +1,67 @@
-# Phish Triage
+# Phishing Analysis Tool
 
-Phish Triage is a phishing-email analysis project built around the `CEAS_08` dataset.
+Phishing Analysis Tool is a phishing email analysis project built around the `CEAS_08` dataset.
 
-The current version does two things:
+The project takes a practical approach:
 
-- scores each email as phishing or legitimate
-- writes both a machine-readable JSON report and a PDF overview
+- train a simple, explainable classifier
+- score emails as phishing or legitimate
+- produce both JSON output for automation and a PDF overview for reporting
 
-The project started as a simpler rule-based analyzer, then evolved into a lightweight text-classification pipeline after error analysis showed the rules were too brittle on CEAS. The current model uses TF-IDF features with a linear SVM, which kept the code fast and readable while producing a large jump in accuracy.
+It is intentionally not a deep learning project. The goal was to build something that feels realistic to explain, maintain, and run locally.
 
-## Why I Built It
+## What It Does
 
-I wanted a phishing-analysis project that felt practical instead of demo-only:
-
-- a real public dataset
-- measurable evaluation
-- outputs that could be useful in automation or reporting
-- code that is still understandable without turning into a giant ML framework
-
-The goal was not just to classify emails, but to make the tradeoffs visible. That is why the repo keeps both model predictions and human-readable supporting signals in the final output.
-
-## Current Approach
-
-For CEAS CSV runs, the project:
+For a CEAS CSV run, the tool:
 
 1. loads the dataset in a fixed CEAS-only format
-2. builds TF-IDF features from sender, subject, and body text
-3. evaluates the classifier with stratified cross-validation
-4. writes a JSON report with per-email predictions
-5. writes a PDF overview with summary metrics and dataset-level results
+2. builds a lightweight text model from email subjects
+3. evaluates that model on a sender-domain holdout split
+4. predicts phishing vs legitimate labels
+5. writes:
+   - `reports/ceas_analysis.json`
+   - `reports/ceas_overview.pdf`
 
-For single `.eml` files, it trains on the local CEAS dataset and then predicts the file you pass in.
+For a single `.eml` file, it trains on the local CEAS dataset and predicts the email you pass in.
 
-The explanation layer still adds readable supporting signals such as:
+## Model Choice
 
-- brand impersonation
+The current classifier is deliberately simple:
+
+- subject text only
+- `CountVectorizer`
+- `ComplementNB` (Complement Naive Bayes)
+
+That combination is easy to reason about, fast to train, and much more believable as a production-ready baseline than a near-perfect benchmark model.
+
+The repo still keeps a small explanation layer for reporting, so the output can show supporting indicators such as:
+
 - suspicious account language
-- link-heavy content
+- links or marketing-style language
+- brand impersonation
 - authentication failures in real `.eml` files
-- common signs of legitimate mailing-list or thread traffic
+- signals that look more like legitimate thread or list traffic
 
-## Results
+## Evaluation Approach
+
+The reported CEAS metrics are based on an `80/20 sender-domain grouped holdout`.
+
+That means:
+
+- the model trains on 80% of the dataset
+- the test split is 20%
+- sender domains in the test split are held out from training
+
+This is stricter and more realistic than a plain random split because it reduces leakage from very similar senders appearing in both train and test.
+
+## Current Results
 
 Current full-dataset CEAS results:
 
-- Accuracy: `0.9985`
-- Precision: `0.9990`
-- Recall: `0.9982`
-- F1: `0.9986`
+- Accuracy: `0.9419`
+- Precision: `0.9519`
+- Recall: `0.9443`
+- F1: `0.9481`
 
 Previous rule-based baseline:
 
@@ -56,18 +70,30 @@ Previous rule-based baseline:
 - Recall: `0.9572`
 - F1: `0.8985`
 
-That improvement came mainly from replacing hand-tuned scoring rules with a simple linear model that handles wording, formatting, and sender patterns much better across the full dataset.
+So the project improved substantially over the original rule scoring, but still stays in a realistic range for a simple classical ML approach.
+
+## Why I Built It This Way
+
+I wanted the project to feel like something I could defend in an interview:
+
+- a real dataset
+- measurable performance
+- straightforward modeling choices
+- readable code
+- useful outputs instead of just notebook metrics
+
+The point was not to squeeze out the flashiest number possible. It was to build a phishing analysis tool that looks like something an engineer could actually own and explain.
 
 ## Project Structure
 
 - `main.py`: CLI entry point
 - `parser/csv_loader.py`: CEAS dataset loading
 - `parser/header_parser.py`: `.eml` parsing helpers
-- `analyzer/ml_classifier.py`: model training, prediction, and cross-validation
+- `analyzer/ml_classifier.py`: training, holdout evaluation, and prediction
 - `analyzer/suspicious.py`: supporting explanation signals
 - `reports/json_report.py`: JSON output
 - `reports/pdf_report.py`: PDF overview
-- `reports/report_builder.py`: summary metrics and report assembly
+- `reports/report_builder.py`: report summary logic
 
 ## Usage
 
@@ -95,13 +121,8 @@ Analyze a single email file:
 python main.py samples/real-sample-1.eml
 ```
 
-Default outputs:
-
-- `reports/ceas_analysis.json`
-- `reports/ceas_overview.pdf`
-
 ## Notes
 
-- The repo is CEAS-only now. Old multi-dataset code paths were intentionally removed.
+- The project is CEAS-only now. Old multi-dataset code paths were removed.
 - Generated JSON and PDF reports are overwritten when the tool runs again with the same output names.
-- The PDF overview is meant for quick inspection; the JSON report contains the detailed per-email results.
+- The PDF overview focuses on evaluation metrics and class balance instead of row-by-row examples.

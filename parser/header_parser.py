@@ -55,20 +55,6 @@ def decode_part_payload(part: Message) -> str:
         return raw_payload
 
     return ""
-
-
-def extract_sender(msg: Message) -> dict:
-    from_header = msg.get("From")
-    reply_to_header = msg.get("Reply-To")
-    return_path_header = msg.get("Return-Path")
-
-    return {
-        "from": from_header,
-        "reply_to": reply_to_header,
-        "return_path": return_path_header,
-    }
-
-
 def extract_received_chain(msg: Message) -> list:
     received_headers = msg.get_all("Received")
 

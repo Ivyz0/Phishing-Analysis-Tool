@@ -6,7 +6,7 @@ def write_pdf_overview(report: dict, output_path: str) -> None:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import letter
         from reportlab.lib.styles import getSampleStyleSheet
-        from reportlab.platypus import PageBreak, SimpleDocTemplate, Spacer, Table, TableStyle
+        from reportlab.platypus import SimpleDocTemplate, Spacer, Table, TableStyle
         from reportlab.platypus.paragraph import Paragraph
     except ImportError as exc:
         raise RuntimeError(
@@ -41,6 +41,12 @@ def write_pdf_overview(report: dict, output_path: str) -> None:
     if summary.get("evaluation_method"):
         summary_rows.append(["Evaluation method", summary["evaluation_method"]])
 
+    if summary.get("train_size") is not None:
+        summary_rows.append(["Training rows", summary["train_size"]])
+
+    if summary.get("test_size") is not None:
+        summary_rows.append(["Test rows", summary["test_size"]])
+
     if evaluation is not None:
         summary_rows.extend(
             [
@@ -57,56 +63,17 @@ def write_pdf_overview(report: dict, output_path: str) -> None:
 
     story.append(Paragraph("Top Indicators", styles["Heading2"]))
     indicator_rows = [["Indicator", "Count"]]
-    for indicator in summary["top_indicators"]:
+    indicators_for_pdf = summary["top_indicators"]
+    if len(indicators_for_pdf) > 1:
+        indicators_for_pdf = indicators_for_pdf[:-1]
+
+    for indicator in indicators_for_pdf:
         indicator_rows.append([indicator["indicator"], indicator["count"]])
 
     if len(indicator_rows) == 1:
         indicator_rows.append(["No positive indicators", 0])
 
     story.append(build_table(Table, TableStyle, colors, indicator_rows))
-    story.append(Spacer(1, 24))
-    story.append(Spacer(1, 24))
-    story.append(PageBreak())
-
-    if evaluation is not None:
-        story.append(Paragraph("Performance Breakdown", styles["Heading2"]))
-        performance_rows = [
-            ["Metric", "Value"],
-            ["Specificity", format_metric(evaluation["specificity"])],
-            ["Balanced accuracy", format_metric(evaluation["balanced_accuracy"])],
-            ["Error rate", format_metric(evaluation["error_rate"])],
-            ["False positive rate", format_metric(evaluation["false_positive_rate"])],
-            ["False negative rate", format_metric(evaluation["false_negative_rate"])],
-        ]
-        story.append(build_table(Table, TableStyle, colors, performance_rows))
-        story.append(Spacer(1, 16))
-
-        story.append(Paragraph("Confusion Matrix", styles["Heading2"]))
-        confusion = evaluation["confusion_matrix"]
-        confusion_rows = [
-            ["Actual / Predicted", "Phishing", "Legitimate"],
-            ["Phishing", confusion["true_positive"], confusion["false_negative"]],
-            ["Legitimate", confusion["false_positive"], confusion["true_negative"]],
-        ]
-        story.append(build_table(Table, TableStyle, colors, confusion_rows, col_widths=[140, 140, 140]))
-        story.append(Spacer(1, 16))
-
-        story.append(Paragraph("Class Balance", styles["Heading2"]))
-        support = evaluation["support"]
-        balance_rows = [
-            ["Class", "Ground truth", "Predicted"],
-            [
-                "Phishing",
-                support["phishing"],
-                summary["prediction_counts"].get("Phishing", 0),
-            ],
-            [
-                "Legitimate",
-                support["legitimate"],
-                summary["prediction_counts"].get("Legitimate", 0),
-            ],
-        ]
-        story.append(build_table(Table, TableStyle, colors, balance_rows, col_widths=[140, 140, 140]))
 
     document.build(story)
 

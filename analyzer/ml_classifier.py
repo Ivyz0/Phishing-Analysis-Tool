@@ -1,61 +1,77 @@
-import math
-from collections import Counter
+from email.utils import parseaddr
 
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import GroupShuffleSplit
 from sklearn.pipeline import Pipeline
-from sklearn.svm import LinearSVC
+from sklearn.naive_bayes import ComplementNB
 
-MODEL_NAME = "tfidf_linear_svm"
-MAX_FOLDS = 5
+MODEL_NAME = "subject_count_complement_nb"
+HOLDOUT_TEST_SIZE = 0.2
+HOLDOUT_RANDOM_STATE = 7
 
 
-def cross_validate_records(records: list) -> tuple[list, dict]:
+def evaluate_dataset(records: list) -> tuple[list, dict]:
     labels = get_numeric_labels(records)
-    fold_count = choose_fold_count(labels)
+    groups = build_groups(records)
 
-    if fold_count < 2:
+    if len(set(groups)) < 2:
         model = train_model(records)
         predictions = predict_records(model, records)
         return predictions, {
             "method": "full-fit fallback",
-            "folds": 1,
-            "notes": "Cross-validation was skipped because there were not enough labeled examples.",
+            "train_size": len(records),
+            "test_size": 0,
+            "metrics": None,
         }
 
-    texts = build_texts(records)
-    cv = StratifiedKFold(n_splits=fold_count, shuffle=True, random_state=42)
+    splitter = GroupShuffleSplit(
+        n_splits=1,
+        test_size=HOLDOUT_TEST_SIZE,
+        random_state=HOLDOUT_RANDOM_STATE,
+    )
+    train_index, test_index = next(splitter.split(records, labels, groups))
 
-    predicted_labels = [0] * len(records)
-    decision_scores = [0.0] * len(records)
+    train_records = [records[index] for index in train_index]
+    model = train_model(train_records)
+    predictions = predict_records(model, records)
 
-    for train_index, test_index in cv.split(texts, labels):
-        train_records = [records[index] for index in train_index]
-        test_records = [records[index] for index in test_index]
-
-        model = train_model(train_records)
-        fold_predictions = predict_records(model, test_records)
-
-        for position, record_index in enumerate(test_index):
-            predicted_labels[record_index] = 1 if fold_predictions[position]["is_phishing"] else 0
-            decision_scores[record_index] = fold_predictions[position]["decision_score"]
-
-    predictions = [
-        build_prediction_from_score(decision_score)
-        for decision_score in decision_scores
-    ]
+    test_labels = [labels[index] for index in test_index]
+    test_predictions = [1 if predictions[index]["is_phishing"] else 0 for index in test_index]
+    confusion_matrix = build_confusion_matrix(test_labels, test_predictions)
+    true_positive = confusion_matrix["true_positive"]
+    true_negative = confusion_matrix["true_negative"]
+    false_positive = confusion_matrix["false_positive"]
+    false_negative = confusion_matrix["false_negative"]
+    specificity = safe_divide(true_negative, true_negative + false_positive)
+    false_positive_rate = safe_divide(false_positive, false_positive + true_negative)
+    false_negative_rate = safe_divide(false_negative, false_negative + true_positive)
+    balanced_accuracy = (recall_score(test_labels, test_predictions) + specificity) / 2
+    error_rate = safe_divide(false_positive + false_negative, len(test_labels))
 
     metrics = {
-        "method": f"{fold_count}-fold stratified cross-validation",
-        "folds": fold_count,
-        "accuracy": round(accuracy_score(labels, predicted_labels), 4),
-        "precision": round(precision_score(labels, predicted_labels), 4),
-        "recall": round(recall_score(labels, predicted_labels), 4),
-        "f1_score": round(f1_score(labels, predicted_labels), 4),
+        "accuracy": round(accuracy_score(test_labels, test_predictions), 4),
+        "precision": round(precision_score(test_labels, test_predictions), 4),
+        "recall": round(recall_score(test_labels, test_predictions), 4),
+        "f1_score": round(f1_score(test_labels, test_predictions), 4),
+        "specificity": round(specificity, 4),
+        "balanced_accuracy": round(balanced_accuracy, 4),
+        "error_rate": round(error_rate, 4),
+        "false_positive_rate": round(false_positive_rate, 4),
+        "false_negative_rate": round(false_negative_rate, 4),
+        "support": {
+            "phishing": sum(test_labels),
+            "legitimate": len(test_labels) - sum(test_labels),
+        },
+        "confusion_matrix": confusion_matrix,
     }
 
-    return predictions, metrics
+    return predictions, {
+        "method": "80/20 sender-domain grouped holdout",
+        "train_size": len(train_index),
+        "test_size": len(test_index),
+        "metrics": metrics,
+    }
 
 
 def train_model(records: list):
@@ -68,32 +84,26 @@ def train_model(records: list):
 
 def predict_records(model, records: list) -> list:
     texts = build_texts(records)
-    decision_scores = model.decision_function(texts)
-
-    return [build_prediction_from_score(float(score)) for score in decision_scores]
+    probabilities = model.predict_proba(texts)[:, 1]
+    return [build_prediction_from_probability(float(probability)) for probability in probabilities]
 
 
 def build_pipeline() -> Pipeline:
     return Pipeline(
         [
             (
-                "tfidf",
-                TfidfVectorizer(
+                "vectorizer",
+                CountVectorizer(
                     lowercase=True,
                     stop_words="english",
-                    ngram_range=(1, 2),
-                    min_df=2,
-                    max_features=80000,
-                    sublinear_tf=True,
+                    ngram_range=(1, 1),
+                    min_df=5,
+                    max_features=2000,
                 ),
             ),
             (
                 "classifier",
-                LinearSVC(
-                    C=1.5,
-                    random_state=42,
-                    max_iter=5000,
-                ),
+                ComplementNB(),
             ),
         ]
     )
@@ -104,36 +114,21 @@ def build_texts(records: list) -> list:
 
 
 def build_model_text(record: dict) -> str:
-    sender = (record.get("sender") or "").strip()
-    subject = (record.get("subject") or "").strip()
-    body = (record.get("body") or "").strip()
-    return f"subject {subject} sender {sender} body {body}"
+    return (record.get("subject") or "").strip()
 
 
-def build_prediction_from_score(decision_score: float) -> dict:
-    risk_score = decision_score_to_risk_score(decision_score)
-    predicted_label = "Phishing" if decision_score >= 0 else "Legitimate"
+def build_prediction_from_probability(probability: float) -> dict:
+    predicted_label = "Phishing" if probability >= 0.5 else "Legitimate"
+    risk_score = int(round(probability * 100))
 
     return {
         "label": predicted_label,
         "is_phishing": predicted_label == "Phishing",
         "risk_score": risk_score,
         "confidence": score_to_confidence(risk_score),
-        "decision_score": round(decision_score, 4),
+        "probability": round(probability, 4),
         "model_name": MODEL_NAME,
     }
-
-
-def decision_score_to_risk_score(decision_score: float) -> int:
-    scaled_score = decision_score * 3.0
-
-    if scaled_score >= 0:
-        probability = 1.0 / (1.0 + math.exp(-scaled_score))
-    else:
-        exp_value = math.exp(scaled_score)
-        probability = exp_value / (1.0 + exp_value)
-
-    return int(round(probability * 100))
 
 
 def score_to_confidence(risk_score: int) -> str:
@@ -149,20 +144,48 @@ def score_to_confidence(risk_score: int) -> str:
 
 
 def get_numeric_labels(records: list) -> list:
-    numeric_labels = []
-
-    for record in records:
-        label = record.get("ground_truth_label")
-        numeric_labels.append(1 if label == "Phishing" else 0)
-
-    return numeric_labels
+    return [1 if record.get("ground_truth_label") == "Phishing" else 0 for record in records]
 
 
-def choose_fold_count(labels: list) -> int:
-    label_counts = Counter(labels)
+def build_groups(records: list) -> list:
+    return [extract_sender_domain(record.get("sender") or "") for record in records]
 
-    if not label_counts:
-        return 0
 
-    minority_class_count = min(label_counts.values())
-    return min(MAX_FOLDS, minority_class_count)
+def extract_sender_domain(sender: str) -> str:
+    _, address = parseaddr(sender)
+
+    if "@" not in address:
+        return "unknown"
+
+    return address.split("@")[-1].strip().lower() or "unknown"
+
+
+def build_confusion_matrix(actual_labels: list, predicted_labels: list) -> dict:
+    true_positive = 0
+    true_negative = 0
+    false_positive = 0
+    false_negative = 0
+
+    for actual, predicted in zip(actual_labels, predicted_labels):
+        if actual == 1 and predicted == 1:
+            true_positive += 1
+        elif actual == 1 and predicted == 0:
+            false_negative += 1
+        elif actual == 0 and predicted == 1:
+            false_positive += 1
+        else:
+            true_negative += 1
+
+    return {
+        "true_positive": true_positive,
+        "true_negative": true_negative,
+        "false_positive": false_positive,
+        "false_negative": false_negative,
+    }
+
+
+def safe_divide(numerator: float, denominator: float) -> float:
+    if denominator == 0:
+        return 0.0
+
+    return numerator / denominator

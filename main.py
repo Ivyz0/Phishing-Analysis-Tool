@@ -2,7 +2,7 @@ import argparse
 import os
 import sys
 
-from analyzer.ml_classifier import cross_validate_records, train_model, predict_records, MODEL_NAME
+from analyzer.ml_classifier import evaluate_dataset, train_model, predict_records, MODEL_NAME
 from analyzer.suspicious import analyze_record
 from parser.csv_loader import load_emails_from_csv
 from parser.header_parser import extract_body_text, parse_email
@@ -53,7 +53,7 @@ def load_records(input_path: str, limit: int = None) -> tuple[list, dict]:
             "path": os.path.abspath(input_path),
             "limit": limit,
             "model_name": MODEL_NAME,
-            "evaluation_method": "5-fold stratified cross-validation when labels are available",
+            "evaluation_method": "80/20 sender-domain grouped holdout",
         }
         return records, source_details
 
@@ -87,7 +87,7 @@ def load_records(input_path: str, limit: int = None) -> tuple[list, dict]:
 
 
 def run_dataset_analysis(records: list) -> tuple[list, dict]:
-    predictions, evaluation_details = cross_validate_records(records)
+    predictions, evaluation_details = evaluate_dataset(records)
     analyses = []
 
     for record, prediction in zip(records, predictions):
@@ -163,13 +163,19 @@ def main() -> int:
         if source_details["input_type"] == "csv":
             analyses, evaluation_details = run_dataset_analysis(records)
             source_details["evaluation_method"] = evaluation_details["method"]
+            source_details["train_size"] = evaluation_details["train_size"]
+            source_details["test_size"] = evaluation_details["test_size"]
         else:
             analyses = run_single_email_analysis(records[0])
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
-    report = build_report(analyses, source_details)
+    report = build_report(
+        analyses,
+        source_details,
+        evaluation_metrics=evaluation_details.get("metrics") if source_details["input_type"] == "csv" else None,
+    )
 
     write_json_report(report, args.json_out)
 

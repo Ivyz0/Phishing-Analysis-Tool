@@ -120,23 +120,6 @@ def build_supporting_signals(
     return signals
 
 
-def analyze(msg: Message) -> list:
-    record = {
-        "msg": msg,
-        "sender": msg.get("From") or "",
-        "subject": msg.get("Subject") or "",
-        "body": extract_body_text(msg),
-        "dataset_url_count": 0,
-    }
-    return build_supporting_signals(
-        record=record,
-        sender=record["sender"],
-        subject=record["subject"],
-        body=record["body"],
-        detected_url_count=len(extract_urls(record["subject"] + " " + record["body"])),
-    )
-
-
 def check_domain_mismatch(msg: Message) -> list:
     from_domain = get_domain_from_address(msg.get("From"))
     return_path_domain = get_domain_from_address(msg.get("Return-Path"))
