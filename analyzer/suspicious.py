@@ -73,24 +73,13 @@ TECHNICAL_THREAD_PATTERN = re.compile(
 SPACED_TEXT_PATTERN = re.compile(r"(?:\b[A-Za-z]\b\s+){6,}")
 
 
-def analyze_record(record: dict) -> dict:
+def analyze_record(record: dict, prediction: dict) -> dict:
     msg = record["msg"]
     sender = record.get("sender") or msg.get("From") or ""
     subject = record.get("subject") or msg.get("Subject") or ""
     body = record.get("body") or extract_body_text(msg)
     detected_urls = extract_urls(" ".join([subject, body]))
-
-    signals = []
-    signals.extend(check_domain_mismatch(msg))
-    signals.extend(check_reply_to_mismatch(msg))
-    signals.extend(check_auth_failures(msg))
-    signals.extend(check_received_chain(msg))
-    signals.extend(check_brand_impersonation(sender, subject))
-    signals.extend(check_content_signals(record, sender, subject, body, len(detected_urls)))
-
-    total_points = sum(signal["points"] for signal in signals)
-    risk_score = clamp_score(50 + total_points)
-    predicted_label = "Phishing" if risk_score >= 50 else "Legitimate"
+    signals = build_supporting_signals(record, sender, subject, body, len(detected_urls))
 
     return {
         "row_index": record.get("index"),
@@ -100,24 +89,52 @@ def analyze_record(record: dict) -> dict:
         "receiver": record.get("receiver") or msg.get("To"),
         "date": record.get("date") or msg.get("Date"),
         "subject": subject,
-        "prediction": {
-            "label": predicted_label,
-            "is_phishing": predicted_label == "Phishing",
-            "risk_score": risk_score,
-            "confidence": score_to_confidence(risk_score),
-        },
+        "prediction": prediction,
         "signals": sort_signals(signals),
         "body_preview": build_preview(body),
         "url_summary": {
             "dataset_url_count": record.get("dataset_url_count", 0),
             "detected_url_count": len(detected_urls),
         },
-        "explanation": build_explanation(predicted_label, signals),
+        "explanation": build_explanation(prediction["label"], signals),
     }
 
 
+def build_supporting_signals(
+    record: dict,
+    sender: str,
+    subject: str,
+    body: str,
+    detected_url_count: int,
+) -> list:
+    signals = []
+    msg = record["msg"]
+
+    signals.extend(check_domain_mismatch(msg))
+    signals.extend(check_reply_to_mismatch(msg))
+    signals.extend(check_auth_failures(msg))
+    signals.extend(check_received_chain(msg))
+    signals.extend(check_brand_impersonation(sender, subject))
+    signals.extend(check_content_signals(record, sender, subject, body, detected_url_count))
+
+    return signals
+
+
 def analyze(msg: Message) -> list:
-    return analyze_record({"msg": msg}).get("signals", [])
+    record = {
+        "msg": msg,
+        "sender": msg.get("From") or "",
+        "subject": msg.get("Subject") or "",
+        "body": extract_body_text(msg),
+        "dataset_url_count": 0,
+    }
+    return build_supporting_signals(
+        record=record,
+        sender=record["sender"],
+        subject=record["subject"],
+        body=record["body"],
+        detected_url_count=len(extract_urls(record["subject"] + " " + record["body"])),
+    )
 
 
 def check_domain_mismatch(msg: Message) -> list:
@@ -481,29 +498,13 @@ def build_explanation(predicted_label: str, signals: list) -> str:
 
     if predicted_label == "Phishing":
         if positive_signals:
-            return "Predicted phishing because of: " + ", ".join(positive_signals) + "."
-        return "Predicted phishing because the score stayed at or above the phishing threshold."
+            return "Predicted phishing. Supporting signals: " + ", ".join(positive_signals) + "."
+        return "Predicted phishing based on the text-classification model."
 
     if negative_signals:
-        return "Predicted legitimate because of: " + ", ".join(negative_signals) + "."
+        return "Predicted legitimate. Supporting signals: " + ", ".join(negative_signals) + "."
 
-    return "Predicted legitimate because the score stayed below the phishing threshold."
-
-
-def clamp_score(score: int) -> int:
-    return max(0, min(100, score))
-
-
-def score_to_confidence(score: int) -> str:
-    distance_from_threshold = abs(score - 50)
-
-    if distance_from_threshold >= 25:
-        return "high"
-
-    if distance_from_threshold >= 10:
-        return "medium"
-
-    return "low"
+    return "Predicted legitimate based on the text-classification model."
 
 
 def build_preview(text: str, max_length: int = 220) -> str:

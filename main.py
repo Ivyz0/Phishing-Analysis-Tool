@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 
+from analyzer.ml_classifier import cross_validate_records, train_model, predict_records, MODEL_NAME
 from analyzer.suspicious import analyze_record
 from parser.csv_loader import load_emails_from_csv
 from parser.header_parser import extract_body_text, parse_email
@@ -51,6 +52,8 @@ def load_records(input_path: str, limit: int = None) -> tuple[list, dict]:
             "dataset_name": "CEAS_08",
             "path": os.path.abspath(input_path),
             "limit": limit,
+            "model_name": MODEL_NAME,
+            "evaluation_method": "5-fold stratified cross-validation when labels are available",
         }
         return records, source_details
 
@@ -76,18 +79,38 @@ def load_records(input_path: str, limit: int = None) -> tuple[list, dict]:
         "dataset_name": None,
         "path": os.path.abspath(input_path),
         "limit": None,
+        "model_name": MODEL_NAME,
+        "evaluation_method": "not applicable for single-email prediction",
     }
 
     return [record], source_details
 
 
-def run_analysis(records: list) -> list:
+def run_dataset_analysis(records: list) -> tuple[list, dict]:
+    predictions, evaluation_details = cross_validate_records(records)
     analyses = []
 
-    for record in records:
-        analyses.append(analyze_record(record))
+    for record, prediction in zip(records, predictions):
+        analyses.append(analyze_record(record, prediction))
 
-    return analyses
+    return analyses, evaluation_details
+
+
+def run_single_email_analysis(record: dict) -> list:
+    training_records = load_training_records()
+    model = train_model(training_records)
+    prediction = predict_records(model, [record])[0]
+    return [analyze_record(record, prediction)]
+
+
+def load_training_records() -> list:
+    try:
+        return load_emails_from_csv(DEFAULT_DATASET_PATH)
+    except (FileNotFoundError, ValueError) as exc:
+        raise RuntimeError(
+            "A trained model is built from the local CEAS dataset. "
+            f"Could not load {DEFAULT_DATASET_PATH}: {exc}"
+        ) from exc
 
 
 def print_summary(report: dict, json_output_path: str, pdf_output_path: str, pdf_written: bool) -> None:
@@ -105,9 +128,10 @@ def print_summary(report: dict, json_output_path: str, pdf_output_path: str, pdf
     if evaluation is not None:
         print(
             "Accuracy vs dataset labels: "
-            f"{evaluation['accuracy']:.3f} | "
-            f"Precision: {evaluation['precision']:.3f} | "
-            f"Recall: {evaluation['recall']:.3f}"
+            f"{evaluation['accuracy']:.4f} | "
+            f"Precision: {evaluation['precision']:.4f} | "
+            f"Recall: {evaluation['recall']:.4f} | "
+            f"F1: {evaluation['f1_score']:.4f}"
         )
 
     print(f"JSON report: {os.path.abspath(json_output_path)}")
@@ -135,7 +159,16 @@ def main() -> int:
         print("No emails were loaded from the input file.", file=sys.stderr)
         return 1
 
-    analyses = run_analysis(records)
+    try:
+        if source_details["input_type"] == "csv":
+            analyses, evaluation_details = run_dataset_analysis(records)
+            source_details["evaluation_method"] = evaluation_details["method"]
+        else:
+            analyses = run_single_email_analysis(records[0])
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
     report = build_report(analyses, source_details)
 
     write_json_report(report, args.json_out)

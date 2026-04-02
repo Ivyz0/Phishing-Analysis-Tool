@@ -5,9 +5,9 @@ def write_pdf_overview(report: dict, output_path: str) -> None:
     try:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet
         from reportlab.platypus import PageBreak, SimpleDocTemplate, Spacer, Table, TableStyle
         from reportlab.platypus.paragraph import Paragraph
-        from reportlab.lib.styles import getSampleStyleSheet
     except ImportError as exc:
         raise RuntimeError(
             "PDF output requires reportlab. Install dependencies with `pip install -r requirements.txt`."
@@ -32,10 +32,14 @@ def write_pdf_overview(report: dict, output_path: str) -> None:
 
     summary_rows = [
         ["Emails analyzed", summary["emails_analyzed"]],
+        ["Model", summary.get("model_name", "n/a")],
         ["Predicted phishing", summary["prediction_counts"].get("Phishing", 0)],
         ["Predicted legitimate", summary["prediction_counts"].get("Legitimate", 0)],
         ["Average risk score", summary["average_risk_score"]],
     ]
+
+    if summary.get("evaluation_method"):
+        summary_rows.append(["Evaluation method", summary["evaluation_method"]])
 
     if evaluation is not None:
         summary_rows.extend(
@@ -64,39 +68,45 @@ def write_pdf_overview(report: dict, output_path: str) -> None:
     story.append(Spacer(1, 24))
     story.append(PageBreak())
 
-    story.append(Paragraph("Highest Risk Emails", styles["Heading2"]))
-    high_risk_rows = [["Row", "Risk", "Prediction", "Truth", "Subject"]]
-    for item in summary["highest_risk_emails"]:
-        high_risk_rows.append(
-            [
-                item["row_index"],
-                item["risk_score"],
-                item["prediction"],
-                item["ground_truth_label"] or "n/a",
-                shorten(item["subject"]),
-            ]
-        )
-
-    story.append(build_table(Table, TableStyle, colors, high_risk_rows, col_widths=[45, 45, 85, 80, 280]))
-
-    mismatches = summary.get("mismatches", [])
-    if mismatches:
+    if evaluation is not None:
+        story.append(Paragraph("Performance Breakdown", styles["Heading2"]))
+        performance_rows = [
+            ["Metric", "Value"],
+            ["Specificity", format_metric(evaluation["specificity"])],
+            ["Balanced accuracy", format_metric(evaluation["balanced_accuracy"])],
+            ["Error rate", format_metric(evaluation["error_rate"])],
+            ["False positive rate", format_metric(evaluation["false_positive_rate"])],
+            ["False negative rate", format_metric(evaluation["false_negative_rate"])],
+        ]
+        story.append(build_table(Table, TableStyle, colors, performance_rows))
         story.append(Spacer(1, 16))
-        story.append(Paragraph("Top Prediction Mismatches", styles["Heading2"]))
-        mismatch_rows = [["Row", "Risk", "Truth", "Predicted", "Subject"]]
 
-        for item in mismatches:
-            mismatch_rows.append(
-                [
-                    item["row_index"],
-                    item["risk_score"],
-                    item["ground_truth_label"],
-                    item["predicted_label"],
-                    shorten(item["subject"]),
-                ]
-            )
+        story.append(Paragraph("Confusion Matrix", styles["Heading2"]))
+        confusion = evaluation["confusion_matrix"]
+        confusion_rows = [
+            ["Actual / Predicted", "Phishing", "Legitimate"],
+            ["Phishing", confusion["true_positive"], confusion["false_negative"]],
+            ["Legitimate", confusion["false_positive"], confusion["true_negative"]],
+        ]
+        story.append(build_table(Table, TableStyle, colors, confusion_rows, col_widths=[140, 140, 140]))
+        story.append(Spacer(1, 16))
 
-        story.append(build_table(Table, TableStyle, colors, mismatch_rows, col_widths=[45, 45, 80, 80, 285]))
+        story.append(Paragraph("Class Balance", styles["Heading2"]))
+        support = evaluation["support"]
+        balance_rows = [
+            ["Class", "Ground truth", "Predicted"],
+            [
+                "Phishing",
+                support["phishing"],
+                summary["prediction_counts"].get("Phishing", 0),
+            ],
+            [
+                "Legitimate",
+                support["legitimate"],
+                summary["prediction_counts"].get("Legitimate", 0),
+            ],
+        ]
+        story.append(build_table(Table, TableStyle, colors, balance_rows, col_widths=[140, 140, 140]))
 
     document.build(story)
 
@@ -124,15 +134,3 @@ def build_table(Table, TableStyle, colors, rows: list, col_widths=None):
 
 def format_metric(value: float) -> str:
     return f"{value:.3f}"
-
-
-def shorten(text: str, max_length: int = 80) -> str:
-    if text is None:
-        return ""
-
-    single_line = " ".join(text.split())
-
-    if len(single_line) <= max_length:
-        return single_line
-
-    return single_line[: max_length - 3] + "..."

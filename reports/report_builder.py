@@ -26,13 +26,17 @@ def build_report(analyses: list, source_details: dict) -> dict:
         "ground_truth_counts": dict(ground_truth_counts),
         "average_risk_score": round(sum(risk_scores) / len(risk_scores), 2),
         "top_indicators": build_top_indicators(indicator_counts),
-        "highest_risk_emails": build_highest_risk_emails(analyses),
     }
+
+    if source_details.get("model_name"):
+        summary["model_name"] = source_details["model_name"]
+
+    if source_details.get("evaluation_method"):
+        summary["evaluation_method"] = source_details["evaluation_method"]
 
     evaluation = build_evaluation(analyses)
     if evaluation is not None:
         summary["evaluation"] = evaluation
-        summary["mismatches"] = build_mismatches(analyses)
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -49,26 +53,6 @@ def build_top_indicators(indicator_counts: Counter) -> list:
         top_indicators.append({"indicator": indicator, "count": count})
 
     return top_indicators
-
-
-def build_highest_risk_emails(analyses: list) -> list:
-    highest_risk = sorted(
-        analyses,
-        key=lambda item: item["prediction"]["risk_score"],
-        reverse=True,
-    )[:10]
-
-    return [
-        {
-            "row_index": item.get("row_index"),
-            "risk_score": item["prediction"]["risk_score"],
-            "prediction": item["prediction"]["label"],
-            "ground_truth_label": item.get("ground_truth_label"),
-            "subject": item.get("subject"),
-        }
-        for item in highest_risk
-    ]
-
 
 def build_evaluation(analyses: list):
     labeled_analyses = [
@@ -103,12 +87,26 @@ def build_evaluation(analyses: list):
     recall = safe_divide(true_positive, true_positive + false_negative)
     accuracy = safe_divide(true_positive + true_negative, total)
     f1_score = safe_divide(2 * precision * recall, precision + recall)
+    specificity = safe_divide(true_negative, true_negative + false_positive)
+    false_positive_rate = safe_divide(false_positive, false_positive + true_negative)
+    false_negative_rate = safe_divide(false_negative, false_negative + true_positive)
+    balanced_accuracy = (recall + specificity) / 2
+    error_rate = safe_divide(false_positive + false_negative, total)
 
     return {
         "accuracy": round(accuracy, 4),
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1_score": round(f1_score, 4),
+        "specificity": round(specificity, 4),
+        "balanced_accuracy": round(balanced_accuracy, 4),
+        "error_rate": round(error_rate, 4),
+        "false_positive_rate": round(false_positive_rate, 4),
+        "false_negative_rate": round(false_negative_rate, 4),
+        "support": {
+            "phishing": true_positive + false_negative,
+            "legitimate": true_negative + false_positive,
+        },
         "confusion_matrix": {
             "true_positive": true_positive,
             "true_negative": true_negative,
@@ -116,33 +114,6 @@ def build_evaluation(analyses: list):
             "false_negative": false_negative,
         },
     }
-
-
-def build_mismatches(analyses: list) -> list:
-    mismatches = []
-
-    for item in analyses:
-        ground_truth_label = item.get("ground_truth_label")
-        predicted_label = item["prediction"]["label"]
-
-        if ground_truth_label not in {"Phishing", "Legitimate"}:
-            continue
-
-        if ground_truth_label == predicted_label:
-            continue
-
-        mismatches.append(
-            {
-                "row_index": item.get("row_index"),
-                "risk_score": item["prediction"]["risk_score"],
-                "ground_truth_label": ground_truth_label,
-                "predicted_label": predicted_label,
-                "subject": item.get("subject"),
-            }
-        )
-
-    mismatches.sort(key=lambda item: item["risk_score"], reverse=True)
-    return mismatches[:10]
 
 
 def safe_divide(numerator: float, denominator: float) -> float:
